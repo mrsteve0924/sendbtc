@@ -1,2 +1,2 @@
 # sendbtc
-script to build a sendtoaddress transaction command
+script to build a bitcoin sendtoaddress transaction command
