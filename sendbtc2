@@ -1,0 +1,59 @@
+#!/bin/bash
+
+source ~/Rxs/colors
+clear
+
+BTC0=$(bitcoin-cli getbalance)
+BTC1=$(curl -s http://api.coindesk.com/v1/bpi/currentprice/usd.json | jq .bpi.USD.rate_float)
+BTC2=$(curl -s http://api.coindesk.com/v1/bpi/currentprice/usd.json | jq -r .bpi.USD.rate | cut -d \. -f1)
+USD_Balance=$(echo "scale=2; ($BTC0*$BTC1)/1" | bc)
+feerate=$(curl -s "https://mempool.space/api/v1/fees/recommended" | jq .hourFee) # fee in satoshis/byte
+#miner_fee_BTC=$(echo "$feerate*144*.00000001" | bc)  # 144 is average transaction size in bytes
+
+#Current BTC market and wallet value
+echo
+echo -e $green"Bitcoin Market Value"$off
+echo 1 BTC = "$"$BTC2
+echo -e "\e[32mWallet Balance\e[0m"
+echo BTC: $BTC0
+echo "US$: "$USD_Balance
+echo -e "\e[32mRecommended Miner fees\e[0m"
+echo Satoshis/vByte: $feerate
+echo
+
+#Send to address
+echo -en  $bold"Send to address: "$off ; read address
+
+#Send amount
+echo -en $bold"Send amount BTC: "$off ; read amount
+
+#Miner Fees
+echo -en $bold"Miner fee in Sats/vByte:$off "; read fee_rate
+echo 
+
+USD=$(echo "scale=2; ($amount*$BTC1)/1" | bc | cut -d \. -f1 | sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta') 
+miner_fee_US=$(echo "scale=2; ($feerate*144*.00000001*$BTC1)/1" | bc)  # 144 is average transaction size in bytes
+sats=$(echo "scale=2; ($fee_rate*0.00000001*144*$BTC1)/1" | bc)
+
+#Summary of pending transaction
+echo -e $green"Summary of pending transaction"$off
+echo -e "You are sending $amount bitcoin which is equal to $bold\$$USD$off"
+echo -e "You are paying $fee_rate satoshis/vByte for this transaction."
+echo -e "Total miner fee will be $(expr $fee_rate \* 144) satoshis, about $bold$sats$off dollars"
+echo
+echo "bitcoin-cli -named sendtoaddress address=$address amount=$amount fee_rate=$fee_rate replaceable=true verbose=false"
+echo
+
+#Send bitcoin
+echo -e $bold"Verify everything is correct. Transactions cannot be undone or BTC recovered!"$off 
+echo
+read -p "Send Bitcoin (yes/N)? You'll still have 10 seconds to cancel if needed: " confirm
+
+if [ -n "$confirm" ] && [ "$confirm" = "yes" ]
+then
+	echo "Bitcoin will be sent in 10 seconds... <ctrl c> to cancel and start over"
+	sleep 10 | pv -t
+	echo
+	bitcoin-cli -named sendtoaddress address=$address amount=$amount fee_rate=$fee_rate replaceable=true verbose=false
+else echo "wah wah...try again"
+fi
