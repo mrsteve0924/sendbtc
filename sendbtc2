@@ -1,0 +1,85 @@
+#!/bin/bash
+
+clear
+trap 'echo; echo "wah wah...try again"; exit 1' INT
+
+bitcoin-cli() {
+    command bitcoin-cli -datadir=/mnt/files.ntfs/Crypto/Bitcoin/ -conf=bitcoin-pruned.conf "$@"
+}
+
+source ~/Rxs/colors
+
+wallet_bal_btc=$(bitcoin-cli getbalance)
+BTC_Market_Price=$(curl -fsS -d "ids=bitcoin&vs_currencies=usd" -G https://api.coingecko.com/api/v3/simple/price | jq -r '.bitcoin.usd')
+BTC_Market_Price2=$(printf "%'d\n" "$BTC_Market_Price")
+wallet_bal_usd=$(echo "scale=2; ($wallet_bal_btc*$BTC_Market_Price)/1" | bc)
+wallet_bal_usd2=$(printf "%'.2f\n" "$wallet_bal_usd")
+rec_feerate=$(curl -fsS "https://mempool.space/api/v1/fees/recommended" | jq -r '.hourFee') # fee in satoshis/byte
+
+#Current BTC market and wallet value
+echo
+echo -e "${green}Bitcoin Market Value${off}"
+echo 1 BTC = "$"$BTC_Market_Price2
+echo -e "\e[32mWallet Balance\e[0m"
+echo "BTC: $wallet_bal_btc"
+echo "US$: "$wallet_bal_usd2
+echo -e "\e[32mRecommended Miner fees\e[0m"
+echo "Satoshis/vByte: $rec_feerate"
+echo
+
+#Send to address
+echo "Coinbase account bitcoin address is: 3FtMVoSgCfmV3yPpA6cK5We8tShhyLiLzp"
+echo -en  "${bold}Send to address: ${off}" ; read -r send_address
+
+#Send amount
+while true; do
+    echo -en "${bold}Send amount BTC (0.00000000): ${off}"
+    read -r send_amount
+
+    if [[ "$send_amount" =~ ^[0-9]+(\.[0-9]{1,8})?$ ]]; then
+        break
+    fi
+
+    echo "Invalid format. Need leading zero and up to 8 decimals"
+done
+
+#Miner Fees
+echo -en "${bold}Miner fee in Sats/vByte:${off} "; read -r send_feerate
+echo 
+
+send_amount_usd=$(printf "%'.2f\n" "$(echo "scale=2; ($send_amount*$BTC_Market_Price)/1" | bc)") 
+tx_fee_usd=$(printf "%'.2f\n" "$(echo "scale=2; ($send_feerate*0.00000001*144*$BTC_Market_Price)" | bc)")
+
+#Summary of pending transaction
+echo -e "${green}Summary of pending transaction${off}"
+echo -e "You are sending ${bold}$send_amount${off} bitcoin which is equal to ${bold}\$$send_amount_usd${off}"
+echo -e "You are paying $send_feerate satoshis/vByte for this transaction."
+echo -e "Total miner fee for this tx will be $((send_feerate * 144)) satoshis, about ${bold}\$${tx_fee_usd}${off}"
+echo
+echo "bitcoin-cli -named sendtoaddress address=$send_address amount=$send_amount fee_rate=$send_feerate replaceable=true verbose=false"
+echo
+
+#Send bitcoin
+echo -e "${bold}Verify everything is correct. Transactions cannot be undone or BTC recovered!${off}" 
+echo
+read -p "Send Bitcoin (yes/N)? You'll still have 20 seconds to cancel if needed: " confirm
+
+
+if [[ "$confirm" == "yes" || "$confirm" == "y" ]]
+then
+    echo "Bitcoin will be sent in 20 seconds..."
+
+    for i in {20..1}; do
+        printf "\rSending in %2d seconds... Ctrl-C to cancel" "$i"
+        sleep 1 || exit 1
+    done
+
+    echo
+    bitcoin-cli -named sendtoaddress \
+        address="$send_address" \
+        amount="$send_amount" \
+        fee_rate="$send_feerate" \
+        replaceable=true \
+        verbose=false
+else echo "wah wah...try again"
+fi

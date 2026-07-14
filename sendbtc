@@ -1,59 +1,114 @@
 #!/bin/bash
 
-source ~/Rxs/colors
 clear
+trap 'echo; echo "wah wah...try again"; exit 1' INT
 
-BTC0=$(bitcoin-cli getbalance)
-BTC1=$(curl -s http://api.coindesk.com/v1/bpi/currentprice/usd.json | jq .bpi.USD.rate_float)
-BTC2=$(curl -s http://api.coindesk.com/v1/bpi/currentprice/usd.json | jq -r .bpi.USD.rate | cut -d \. -f1)
-USD_Balance=$(echo "scale=2; ($BTC0*$BTC1)/1" | bc)
-feerate=$(curl -s "https://mempool.space/api/v1/fees/recommended" | jq .hourFee) # fee in satoshis/byte
-#miner_fee_BTC=$(echo "$feerate*144*.00000001" | bc)  # 144 is average transaction size in bytes
+bitcoin-cli() {
+    command bitcoin-cli -datadir=/mnt/files.ntfs/Crypto/Bitcoin/ -conf=bitcoin-pruned.conf "$@"
+}
+
+source ~/Rxs/colors
+
+wallet_bal_btc=$(bitcoin-cli getbalance)
+BTC_Market_Price=$(curl -fsS -d "ids=bitcoin&vs_currencies=usd" -G https://api.coingecko.com/api/v3/simple/price | jq -r '.bitcoin.usd')
+BTC_Market_Price2=$(printf "%'d\n" "$BTC_Market_Price")
+wallet_bal_usd=$(echo "scale=2; ($wallet_bal_btc*$BTC_Market_Price)/1" | bc)
+wallet_bal_usd2=$(printf "%'.2f\n" "$wallet_bal_usd")
+rec_feerate=$(curl -fsS "https://mempool.space/api/v1/fees/recommended" | jq -r '.hourFee') # fee in satoshis/byte
 
 #Current BTC market and wallet value
 echo
 echo -e $green"Bitcoin Market Value"$off
-echo 1 BTC = "$"$BTC2
+echo 1 BTC = "$"$BTC_Market_Price2
 echo -e "\e[32mWallet Balance\e[0m"
-echo BTC: $BTC0
-echo "US$: "$USD_Balance
+echo BTC: $wallet_bal_btc
+echo "US$: "$wallet_bal_usd2
 echo -e "\e[32mRecommended Miner fees\e[0m"
-echo Satoshis/vByte: $feerate
+echo Satoshis/vByte: $rec_feerate
+echo
+
+echo "To send bitcoin you need to specify 3 things: A bitcoin address, a bitcoin amount and a fee."
 echo
 
 #Send to address
-echo -en  $bold"Send to address: "$off ; read address
+echo -e $green"Send to address:$off This comes from the person you are sending to. Be careful and make sure you trust them.  You can't get bitcoin back or reverse transactions if sent to a wrong address."
+echo
+echo "My Coinbase account's bitcoin address is: 3FtMVoSgCfmV3yPpA6cK5We8tShhyLiLzp"
+echo "To exchange BTC for dollars you need to send the bitcoin to this Coinbase account. Always verify an address before sending bitcoin"
+echo -en  $bold"Send to address: "$off ; read -r send_address
+echo
 
 #Send amount
-echo -en $bold"Send amount BTC: "$off ; read amount
+echo -e $green"Send amount:$off Check the wallet BTC balance. Format is 0.00000000. If sending less than 1 bitcoin use a 0 before the decimal. An amount greater than your balance will cause the transaction to fail"
+while true; do
+    echo -en "${bold}Send amount BTC (0.00000000): ${off}"
+    read -r send_amount
+
+    if [[ "$send_amount" =~ ^[0-9]+(\.[0-9]{1,8})?$ ]]; then
+        break
+    fi
+
+    echo "Invalid format. Need leading zero and up to 8 decimals"
+done
+echo
 
 #Miner Fees
-echo -en $bold"Miner fee in Sats/vByte:$off "; read fee_rate
-echo 
+echo -e $green"Miner Fee:$off This is a mandatory fee added to each transaction. The sender is responsible for paying the fee. Review the current recommended Miner fee in the summary at the top."
+echo
+echo "The miner fee is not something you can calcualte yourself. If the added fee is too low, the transaction may never be confirmed.  Too high and it's just wasting money, but the Tx will confirm. The recommended miner fees can be as low as \$0.30 or \$50+ per Tx (check here https://mempool.space/). More traffic on the Bitcoin network means higher suggested fees.  If fees are very high, wait for them to come down (or not, it's up to you). Weekends usually have the lowest fees. Any transaction that isn't confirmed within 72 hours because of a low fee will be returned to your wallet."
+echo -en $bold"Miner fee in Sats/vByte:$off "; read -r send_feerate
+echo
+ 
 
-USD=$(echo "scale=2; ($amount*$BTC1)/1" | bc | cut -d \. -f1 | sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta') 
-miner_fee_US=$(echo "scale=2; ($feerate*144*.00000001*$BTC1)/1" | bc)  # 144 is average transaction size in bytes
-sats=$(echo "scale=2; ($fee_rate*0.00000001*144*$BTC1)/1" | bc)
+send_amount_usd=$(printf "%'.2f\n" "$(echo "scale=2; ($send_amount*$BTC_Market_Price)/1" | bc)") 
+tx_fee_usd=$(printf "%'.2f\n" "$(echo "scale=2; ($send_feerate*0.00000001*144*$BTC_Market_Price)" | bc)")
 
 #Summary of pending transaction
 echo -e $green"Summary of pending transaction"$off
-echo -e "You are sending $amount bitcoin which is equal to $bold\$$USD$off"
-echo -e "You are paying $fee_rate satoshis/vByte for this transaction."
-echo -e "Total miner fee will be $(expr $fee_rate \* 144) satoshis, about $bold$sats$off dollars"
+echo -e "You are sending $bold$send_amount$off bitcoin which is equal to $bold\$$send_amount_usd$off"
+echo -e "You are paying $send_feerate satoshis/vByte for this transaction. Typical transactions are 144 vBytes. So the total miner fee will be $(expr $send_feerate \* 144) satoshis, about $bold\$$tx_fee_usd$off"
 echo
-echo "bitcoin-cli -named sendtoaddress address=$address amount=$amount fee_rate=$fee_rate replaceable=true verbose=false"
+echo "bitcoin-cli -named sendtoaddress address=$send_address amount=$send_amount fee_rate=$send_feerate replaceable=true verbose=false"
 echo
 
 #Send bitcoin
 echo -e $bold"Verify everything is correct. Transactions cannot be undone or BTC recovered!"$off 
 echo
-read -p "Send Bitcoin (yes/N)? You'll still have 10 seconds to cancel if needed: " confirm
+read -p "Send Bitcoin (yes/N)? You'll still have 20 seconds to cancel if needed: " confirm
 
-if [ -n "$confirm" ] && [ "$confirm" = "yes" ]
+
+
+if [[ "$confirm" == "yes" || "$confirm" == "y" ]]
 then
-	echo "Bitcoin will be sent in 10 seconds... <ctrl c> to cancel and start over"
-	sleep 10 | pv -t
-	echo
-	bitcoin-cli -named sendtoaddress address=$address amount=$amount fee_rate=$fee_rate replaceable=true verbose=false
+    echo "Bitcoin will be sent in 20 seconds..."
+
+    for i in {20..1}; do
+        printf "\rSending in %2d seconds... Ctrl-C to cancel" "$i"
+        sleep 1 || exit 1
+    done
+
+    echo
+    bitcoin-cli -named sendtoaddress \
+        address="$send_address" \
+        amount="$send_amount" \
+        fee_rate="$send_feerate" \
+        replaceable=true \
+        verbose=false
+
+#Transaction result	
+	for i in {1..60}; do
+		echo -n "*"
+		sleep .025	
+	done
+sleep 1
+delay=.75
+echo
+echo "If transaction was successful you'll see a long transaction hash id similar to this:"; sleep $delay
+echo "49ff79a1556ee06b6d1139cb0c5e663193ef0fd8698f55b1b83fb25786fe6350"; sleep $delay
+echo "If unsuccessful you'll see some sort of error message and you'll have to try again."; sleep $delay; echo
+echo "You can copy the hash id to a blockchain explorer to get all sorts of information about the transaction including when it gets confirmed. But the data will be hard to navigate for a newbie. It's even confusing for me."; sleep $delay
+echo "Go to https://mempool.space/ and paste the hash id there."; sleep $delay
+echo
+echo "If sent to the Coinbase account (which is where it should be sent) login there (https://www.coinbase.com/) to verify the bitcoin was received. It might take 10mins to 1 hour for the bitcoin network to confirm it before you'll see the funds in the account. Unfortunately, even for me, the Coinbase website is hard to navigate."; sleep $delay
 else echo "wah wah...try again"
 fi
